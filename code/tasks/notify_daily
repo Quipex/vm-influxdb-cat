@@ -1,0 +1,97 @@
+import "contrib/sranka/telegram"
+import "influxdata/influxdb/secrets"
+import "types"
+import "math"
+
+option task = {name: "daily report", every: 1d, offset: 8h32s}
+
+token = secrets.get(key: "TELEGRAM_TOKEN")
+
+chatId = secrets.get(key: "TELEGRAM_CHAT_ID")
+
+groupByColumns = ["trade_type", "crypto_name", "currency_name", "_time"]
+
+filterSellUah = (tables=<-) =>
+    tables
+        |> filter(fn: (r) => r.trade_type == "SELL" and r.currency_name == "UAH")
+
+filterBuyUah = (tables=<-) =>
+    tables
+        |> filter(fn: (r) => r.trade_type == "BUY" and r.currency_name == "UAH")
+
+filterBuyByn = (tables=<-) =>
+    tables
+        |> filter(fn: (r) => r.trade_type == "BUY" and r.currency_name == "BYN")
+
+yesterday =
+    from(bucket: "binance-p2p-trades-downsample-10m")
+        |> range(start: -1d)
+        |> first()
+        |> group(columns: groupByColumns)
+        |> mean()
+
+today =
+    from(bucket: "binance-p2p-trades-downsample-10m")
+        |> range(start: -11m)
+        |> last()
+        |> group(columns: groupByColumns)
+        |> mean()
+
+set = union(tables: [yesterday, today])
+
+getLastRecord = (ts=<-) =>
+    ts
+        |> last()
+        |> findRecord(fn: (key) => true, idx: 0)
+
+getDiffRecord = (ts=<-) =>
+    ts
+        |> group()
+        |> difference()
+        |> findRecord(fn: (key) => true, idx: 0)
+
+sellUah =
+    filterSellUah(tables: set)
+        |> yield(name: "sellUah")
+
+buyUah =
+    filterBuyUah(tables: set)
+        |> yield(name: "buyUah")
+
+buyByn =
+    filterBuyByn(tables: set)
+        |> yield(name: "buyByn")
+
+sellUahLatest = getLastRecord(ts: sellUah)
+
+sellUahDiff = getDiffRecord(ts: sellUah)
+
+buyUahLatest = getLastRecord(ts: buyUah)
+
+buyUahDiff = getDiffRecord(ts: buyUah)
+
+buyBynLatest = getLastRecord(ts: buyByn)
+
+buyBynDiff = getDiffRecord(ts: buyByn)
+
+extractVal = (val) => string(v: int(v: val._value * 100.0))
+
+first = "Binance P2P (for USDT):\n"
+second = "SELL UAH: ${string(v: sellUahLatest._value)} (${string(v: sellUahDiff._value)})
+"
+third = "BUY UAH: ${string(v: buyUahLatest._value)} (${string(v: buyUahDiff._value)})
+"
+fourth = "BUY BYN: ${string(v: buyBynLatest._value)} (${string(v: buyBynDiff._value)})"
+
+val = first + second + third + fourth
+
+code =
+    telegram.message(
+        token: token,
+        channel: chatId,
+        silent: false,
+        text: extractVal(val: sellUahLatest._value),
+    )
+
+telegram.message(token: token, channel: chatId, silent: false, text: "status code: ${code}")
+

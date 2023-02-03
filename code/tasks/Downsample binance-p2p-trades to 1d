@@ -1,0 +1,7 @@
+option task = {name: "Downsample binance-p2p-trades to 1d", every: 1d, offset: 6h20s}
+
+from(bucket: "binance-p2p-trades-downsample-10m")
+    |> range(start: -task.every)
+    |> aggregateWindow(every: task.every, fn: mean, offset: task.offset)
+    |> to(bucket: "binance-p2p-trades-downsample-1d")
+
